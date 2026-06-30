@@ -139,7 +139,7 @@ const getAccessToken = async () => {
     const data = await response.json();
     tokenState.value = data.access_token;
     tokenState.expiresAt = now + (data.expires_in * 1000);
-    
+
     return tokenState.value;
   } catch (err) {
     const errorMsg = err.name === 'AbortError' ? 'Token request timed out' : err.message;
@@ -172,22 +172,23 @@ const proxyMiddleware = createProxyMiddleware({
     proxyReq: (proxyReq, req) => {
       // Clean up headers and inject new auth
       proxyReq.removeHeader('Authorization');
-      
+
       if (req.dvToken) {
         proxyReq.setHeader('Authorization', `Bearer ${req.dvToken}`);
       }
-      
+
       // Enforce OData standards for Dataverse compatibility
       if (!proxyReq.getHeader('OData-MaxVersion')) proxyReq.setHeader('OData-MaxVersion', '4.0');
       if (!proxyReq.getHeader('OData-Version')) proxyReq.setHeader('OData-Version', '4.0');
       if (!proxyReq.getHeader('Accept')) proxyReq.setHeader('Accept', 'application/json;odata.metadata=minimal');
-      
+      if (!proxyReq.getHeader('Prefer')) proxyReq.setHeader('Prefer', 'odata.include-annotations="none"');
+
       // Egress optimization: Force Dataverse to return compressed data (Gzip/Brotli)
       // We removed the 'odata.include-annotations="none"' because AppSheet relies on some metadata to parse the feed.
       if (!proxyReq.getHeader('Accept-Encoding')) {
         proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
       }
-      
+
       // Dataverse requires If-Match for PATCH operations (Update) to prevent conflicts.
       // Since AppSheet doesn't send it, we inject If-Match: * to force the update.
       if (req.method === 'PATCH' && !proxyReq.getHeader('If-Match')) {
@@ -197,7 +198,7 @@ const proxyMiddleware = createProxyMiddleware({
     error: (err, req, res) => {
       console.error(`[Proxy] Forwarding error on ${req.url}:`, err.message);
       notifyError('Proxy_Forwarding_Error', `${req.url} - ${err.message}`);
-      
+
       if (!res.headersSent) {
         res.status(502).json({ error: 'Bad Gateway', details: err.message });
       }
