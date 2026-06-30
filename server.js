@@ -182,9 +182,10 @@ const proxyMiddleware = createProxyMiddleware({
       if (!proxyReq.getHeader('OData-Version')) proxyReq.setHeader('OData-Version', '4.0');
       if (!proxyReq.getHeader('Accept')) proxyReq.setHeader('Accept', 'application/json');
       
-      // Payload optimization: Ask Dataverse to omit useless annotations from the JSON response
-      if (!proxyReq.getHeader('Prefer')) {
-        proxyReq.setHeader('Prefer', 'odata.include-annotations="none"');
+      // Egress optimization: Force Dataverse to return compressed data (Gzip/Brotli)
+      // We removed the 'odata.include-annotations="none"' because AppSheet relies on some metadata to parse the feed.
+      if (!proxyReq.getHeader('Accept-Encoding')) {
+        proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
       }
       
       // Dataverse requires If-Match for PATCH operations (Update) to prevent conflicts.
