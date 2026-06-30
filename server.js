@@ -182,6 +182,11 @@ const proxyMiddleware = createProxyMiddleware({
       if (!proxyReq.getHeader('OData-Version')) proxyReq.setHeader('OData-Version', '4.0');
       if (!proxyReq.getHeader('Accept')) proxyReq.setHeader('Accept', 'application/json');
       
+      // Payload optimization: Ask Dataverse to omit useless annotations from the JSON response
+      if (!proxyReq.getHeader('Prefer')) {
+        proxyReq.setHeader('Prefer', 'odata.include-annotations="none"');
+      }
+      
       // Dataverse requires If-Match for PATCH operations (Update) to prevent conflicts.
       // Since AppSheet doesn't send it, we inject If-Match: * to force the update.
       if (req.method === 'PATCH' && !proxyReq.getHeader('If-Match')) {
