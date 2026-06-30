@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🌉 OData Reverse Proxy: AppSheet ➔ Microsoft Dataverse
 
 > An ultra-fast and lightweight Node.js reverse proxy built to solve the biggest integration headache between Google AppSheet and Microsoft Dataverse: **Authentication blocking**.
@@ -126,3 +127,7 @@ To fix this:
 Dataverse automatically generates columns like `createdby`, `modifiedby`, `versionnumber`, etc. AppSheet thinks they are mandatory and checks the `Require?` box. 
 If AppSheet tries to send data to these columns, Dataverse will deny access because they are read-only.
 **Solution:** Always uncheck the `Require?`, `Editable?`, and `Show?` boxes for all these native Microsoft audit columns. Let the database fill them in itself!
+=======
+# SheetVerse
+SheetVerse - Use the Dataverse database on your AppSheet apps with oData
+>>>>>>> d7b79c22534bef47aab9862c74cebe62e3e95b8c
