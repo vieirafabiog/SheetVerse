@@ -180,7 +180,7 @@ const proxyMiddleware = createProxyMiddleware({
       // Enforce OData standards for Dataverse compatibility
       if (!proxyReq.getHeader('OData-MaxVersion')) proxyReq.setHeader('OData-MaxVersion', '4.0');
       if (!proxyReq.getHeader('OData-Version')) proxyReq.setHeader('OData-Version', '4.0');
-      if (!proxyReq.getHeader('Accept')) proxyReq.setHeader('Accept', 'application/json');
+      if (!proxyReq.getHeader('Accept')) proxyReq.setHeader('Accept', 'application/json;odata.metadata=minimal');
       
       // Egress optimization: Force Dataverse to return compressed data (Gzip/Brotli)
       // We removed the 'odata.include-annotations="none"' because AppSheet relies on some metadata to parse the feed.
