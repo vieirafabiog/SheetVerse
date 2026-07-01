@@ -64,7 +64,15 @@ export async function fetchAndFilterMetadata({
     return { xml: rawXml, contentType };
   }
 
-  return { xml: applyFilters(rawXml, { includeSystemTables, filterColumnsByPrefix, tablePrefix }), contentType };
+  try {
+    const filteredXml = applyFilters(rawXml, { includeSystemTables, filterColumnsByPrefix, tablePrefix });
+    return { xml: filteredXml, contentType };
+  } catch (err) {
+    // If anything goes wrong during filtering, fall back to the raw XML.
+    // This ensures AppSheet never gets a corrupted/empty schema.
+    console.error('[Metadata] Filtering failed, falling back to raw XML:', err.message);
+    return { xml: rawXml, contentType };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -75,18 +83,23 @@ export async function fetchAndFilterMetadata({
  * Applies the configured filters to the raw EDMX XML string.
  * Works entirely with regex on the raw string — intentionally avoids DOM
  * parsing to keep memory usage low, since the $metadata doc can be 6MB+.
+ *
+ * The Dataverse EDMX is always a single line, so [\s\S] is not strictly needed,
+ * but kept for safety in case the response is ever formatted with newlines.
  */
 function applyFilters(xml, { includeSystemTables, filterColumnsByPrefix, tablePrefix }) {
   const prefix = tablePrefix.toLowerCase();
 
-  // Tracks which EntityType names survived filtering so we can prune EntitySets too.
+  // Tracks which EntityType names survived filtering so we can sync EntitySets.
   const keptEntities = new Set();
 
   // --- Step 1: Filter EntityType blocks ---
-  // Each EntityType represents one OData table.
+  // Each non-abstract EntityType represents one OData table.
+  // NOTE: Some EntityTypes are self-closing (e.g. <EntityType Name="crmbaseentity" Abstract="true" />)
+  // — these are base types with no properties and we leave them alone regardless.
   let filtered = xml.replace(/<EntityType\b([^>]*)>([\s\S]*?)<\/EntityType>/g, (match, attrs, body) => {
     const nameMatch = /\bName="([^"]*)"/.exec(attrs);
-    if (!nameMatch) return match; // Malformed — keep as-is
+    if (!nameMatch) return match;
 
     const entityName = nameMatch[1];
     const isUserTable = entityName.toLowerCase().startsWith(prefix);
@@ -98,13 +111,15 @@ function applyFilters(xml, { includeSystemTables, filterColumnsByPrefix, tablePr
 
     keptEntities.add(entityName);
 
-    // User table with column filtering enabled — strip non-prefixed Properties
+    // User table with column filtering enabled — strip non-prefixed Property elements.
+    // Properties in OData EDMX are self-closing: <Property Name="..." Type="..." />
+    // We use a lazy pattern with optional whitespace before /> to safely capture the attributes.
     if (isUserTable && filterColumnsByPrefix) {
-      // Locate the primary key so we never accidentally remove it
+      // Locate the primary key name from the Key block — it must always survive the filter
       const keyRefMatch = /<PropertyRef\s+Name="([^"]*)"/.exec(body);
       const primaryKey = keyRefMatch ? keyRefMatch[1] : null;
 
-      const filteredBody = body.replace(/<Property\b([^>]*)>/g, (propMatch, propAttrs) => {
+      const filteredBody = body.replace(/<Property\b([^>]*?)\s*\/>/g, (propMatch, propAttrs) => {
         const propNameMatch = /\bName="([^"]*)"/.exec(propAttrs);
         if (!propNameMatch) return propMatch;
         const propName = propNameMatch[1];
@@ -121,26 +136,14 @@ function applyFilters(xml, { includeSystemTables, filterColumnsByPrefix, tablePr
       return `<EntityType${attrs}>${filteredBody}</EntityType>`;
     }
 
-    return match; // User table, no column filter — keep untouched
+    return match;
   });
 
-  // --- Step 2: Prune EntitySet entries in EntityContainer ---
-  // If system tables were removed, their EntitySet counterparts must go too.
-  // Otherwise AppSheet will try to call endpoints that no longer exist in the schema.
-  if (!includeSystemTables) {
-    // Self-closing EntitySet: <EntitySet Name="..." EntityType="mscrm.someEntity" />
-    filtered = filtered.replace(/<EntitySet\b([^>]*)>/g, (match, attrs) => {
-      const typeMatch = /\bEntityType="(?:mscrm\.)?([^"]*)"/.exec(attrs);
-      if (!typeMatch) return match;
-      return keptEntities.has(typeMatch[1]) ? match : '';
-    });
-
-    // Dataverse also exposes Singletons for some system entities
-    filtered = filtered.replace(/<Singleton\b([^>]*)>/g, (match, attrs) => {
-      const typeMatch = /\bType="(?:mscrm\.)?([^"]*)"/.exec(attrs);
-      if (!typeMatch) return match;
-      return keptEntities.has(typeMatch[1]) ? match : '';
-    });
+  // Safety check: if we removed system tables but keptEntities is somehow empty,
+  // bail out and return the original xml to avoid an empty schema.
+  if (!includeSystemTables && keptEntities.size === 0) {
+    console.error('[Metadata] keptEntities is empty — check DATAVERSE_TABLE_PREFIX. Returning unfiltered XML.');
+    return xml;
   }
 
   return filtered;
