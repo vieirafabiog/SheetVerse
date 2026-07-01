@@ -1,6 +1,7 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import dotenv from 'dotenv';
+import { fetchAndFilterMetadata } from './metadata-filter.js';
 
 dotenv.config();
 
@@ -15,8 +16,23 @@ const {
   APPSHEET_USER,
   APPSHEET_PASS,
   WEBHOOK_ERROR,
-  ENABLE_DEBUG_LOGS
+  ENABLE_DEBUG_LOGS,
+  // Metadata filtering options
+  INCLUDE_SYSTEM_TABLES,
+  FILTER_COLUMNS_BY_PREFIX,
+  DATAVERSE_TABLE_PREFIX
 } = process.env;
+
+// Metadata filter flags — both default to the safest/most compatible option
+const includeSystemTables   = INCLUDE_SYSTEM_TABLES !== 'false';    // default: true
+const filterColumnsByPrefix = FILTER_COLUMNS_BY_PREFIX === 'true';  // default: false
+const tablePrefix           = (DATAVERSE_TABLE_PREFIX || '').toLowerCase().trim();
+
+// If either metadata filter is active, we need a prefix to work with
+if ((!includeSystemTables || filterColumnsByPrefix) && !tablePrefix) {
+  console.error('[System] FATAL: DATAVERSE_TABLE_PREFIX must be set when metadata filtering is enabled.');
+  process.exit(1);
+}
 
 if (!envDataverseUrl || !AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET || !APPSHEET_USER || !APPSHEET_PASS) {
   console.error("[System] FATAL: Missing required environment variables.");
@@ -61,9 +77,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-// --- Healthcheck ---
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
 
 // --- Auth Middleware (AppSheet Basic Auth) ---
 const basicAuth = (req, res, next) => {
@@ -157,6 +170,33 @@ const injectBearer = async (req, res, next) => {
     res.status(500).json({ error: 'Internal Server Error', message: 'Failed to authenticate with downstream service' });
   }
 };
+
+// --- Healthcheck ---
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok', ts: Date.now() }));
+
+// --- $metadata Interceptor ---
+// Intercepts OData metadata requests and returns a filtered schema to AppSheet.
+// This avoids exposing system tables and/or unused columns, reducing payload size.
+// Only active when INCLUDE_SYSTEM_TABLES=false or FILTER_COLUMNS_BY_PREFIX=true.
+app.get(/\$metadata$/, basicAuth, injectBearer, async (req, res) => {
+  try {
+    const { xml, contentType } = await fetchAndFilterMetadata({
+      dataverseOrgUrl:       DATAVERSE_ORG_URL,
+      accessToken:           req.dvToken,
+      originalUrl:           req.url,
+      includeSystemTables,
+      filterColumnsByPrefix,
+      tablePrefix
+    });
+
+    res.setHeader('Content-Type', contentType);
+    res.send(xml);
+  } catch (err) {
+    console.error('[Metadata] Filter error:', err.message);
+    notifyError('Metadata_Filter', err.message);
+    res.status(502).json({ error: 'Bad Gateway', details: err.message });
+  }
+});
 
 // --- Proxy Core ---
 const proxyMiddleware = createProxyMiddleware({
